@@ -11,9 +11,13 @@
 ```shell
 npm install
 # 将单页面项目放入到根目录的web目录
-# 将seo.json 配置文件也放入根目录web目录 
+# 将seo.json 配置文件也放入根目录web目录
+
+# 默认启动, 不缓存文件信息; 动态更新文件
 node app.js
 
+# 缓存目录文件信息性能搞一点点 ; 不可以动态更新配置
+node app.js --cache
 
 ```
 
