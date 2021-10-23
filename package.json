@@ -1,0 +1,16 @@
+{
+  "name": "app",
+  "version": "1.0.0",
+  "description": "App Web",
+  "main": "app.js",
+  "scripts": {
+    "run": "node app.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cheerio": "^1.0.0-rc.10",
+    "express": "~4.16.1",
+    "process": "^0.11.10"
+  }
+}
