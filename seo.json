@@ -1,32 +1,3 @@
-# Blueberry Box (NodeJS 服务端渲染) 
-- 使用Vue 或者 React 单页面提供后端服务
-- 提供 `SEO` 优化配置
-
-# 项目说明
-- `app.js` 项目主程序
-- `seo.js` SEO配置文件
-
-
-# 安装项目
-```shell
-npm install
-# 将单页面项目放入到根目录的web目录
-# 将seo.json 配置文件也放入根目录web目录
-
-# 默认启动, 目前已升级，监听文件变化更新索引，效率更高速度更快
-node app.js
-```
-
-# 环境变量
-> `LOCAL_PATH` 扫描本地路径，默认 `./web`
-> `PORT` 服务器启动的端口
-
-# SEO 配置说明
-- `regexp` 正则匹配
-- `preMatch` 路径前缀匹配
-- `tailMatch` 路径后缀匹配
-- `head`  替换的头部元素
-```JSON
 [
   {
     "regexp": ".",
@@ -57,4 +28,3 @@ node app.js
     ]
   }
 ]
-```

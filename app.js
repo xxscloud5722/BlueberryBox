@@ -4,203 +4,252 @@ const http = require('http');
 const process = require('process');
 const fs = require("fs");
 const cheerio = require('cheerio');
+const chokidar = require('chokidar');
 
-const isCacheServer = process.argv.find(r => r === '--cache') != null;
-
-// Default App
-const app = express();
-
-// Root Path
-const root = process.cwd();
-
-// Local Path
-const localPath = path.join(root, 'web');
-const localPathLength = localPath.length;
-
-
-// Generate
-const generateMetas = (seoConfig, requestPath) => {
-    let metas = '';
-    for (let config of seoConfig) {
-        // Pre Match
-        let flag = (config.preMatch != null && config.preMatch.length > 0 && requestPath.startsWith(config.preMatch));
-        // Tail Match
-        flag = flag || (config.tailMatch != null && config.tailMatch.length > 0 && requestPath.endsWith(config.tailMatch));
-        // RegExp Match
-        flag = flag || new RegExp(config.regexp).test(requestPath);
-        // Non Match
-        if (!flag) {
-            continue;
-        }
-        for (let row of config.head) {
-            let meta = '';
-            for (let key in row) {
-                if (row.hasOwnProperty(key)) {
-                    meta += ` ${key}="${row[key]}"`;
-                }
-            }
-            metas += `<meta ${meta}/>\n`;
-        }
-    }
-    return metas;
-}
-
-// Async Read File Info
-const getFileInfo = async (requestPath) => {
-    return new Promise((resolve) => {
-        fs.exists(requestPath, e => {
-            if (!e) {
-                return resolve(null);
-            }
-            fs.stat(requestPath, (err, s) => {
-                if (!s.isFile()) {
+// async utils
+const utils = {
+    /**
+     * Ready file info.
+     * @param path File Path.
+     * @returns {Promise} Async file info or null.
+     */
+    getFileInfo: async (path) => {
+        return new Promise((resolve) => {
+            fs.exists(path, result => {
+                if (!result) {
                     return resolve(null);
                 }
-                return resolve(s);
-            });
-        })
-    });
-}
-
-// Async Read File Data
-const readFile = async (localPath) => {
-    return new Promise((resolve) => {
-        fs.readFile(localPath, (err, data) => {
-            if (err != null) {
-                return resolve(null);
-            }
-            resolve(data.toString('utf-8'));
+                fs.stat(path, (error, stats) => {
+                    if (error != null) {
+                        return resolve(null);
+                    }
+                    if (!stats.isFile()) {
+                        return resolve(null);
+                    }
+                    return resolve(stats);
+                });
+            })
         });
-    });
-}
+    },
 
-// Cache Server
-const serverCache = () => {
-    // Web File Checklist
-    const webChecklist = [];
-    // Default Index.html
-    let indexBuffer = null;
-    // SEO File
-    let seoConfig = []
-    if (fs.existsSync(localPath) && fs.statSync(localPath).isDirectory()) {
-        const scanDir = (scanPath) => {
-            fs.readdirSync(scanPath).forEach(it => {
-                const tempPath = path.join(scanPath, it);
-                const fileInfo = fs.statSync(tempPath);
-                if (fileInfo.isFile()) {
-                    webChecklist.push(tempPath.substring(localPathLength));
-                } else if (fileInfo.isDirectory()) {
-                    scanDir(tempPath);
+    /**
+     * Read file data.
+     * @param localPath File Path.
+     * @returns {Promise} Async file data or null.
+     */
+    readFile: async (localPath) => {
+        return new Promise((resolve) => {
+            fs.readFile(localPath, (error, data) => {
+                if (error != null) {
+                    return resolve(null);
                 }
+                resolve(data.toString('utf-8'));
             });
-        };
-        scanDir(localPath);
+        });
+    },
 
+    /**
+     * Read Dir info.
+     * @param localPath File path.
+     * @returns {Promise} Async dir info or null.
+     */
+    readDir: async (localPath) => {
+        return new Promise(resolve => {
+            fs.readdir(localPath, (error, files) => {
+                if (error != null) {
+                    return resolve(null);
+                }
+                resolve(files);
+            });
+        });
+    }
+};
 
-        const indexPath = path.join(localPath, 'index.html');
-        if (fs.existsSync(indexPath) && fs.statSync(indexPath).isFile()) {
-            indexBuffer = fs.readFileSync(indexPath);
-        }
+// resource class
+class Resource {
+    files = [];
+    index = null;
+    seo = null;
+    suffix = ['favicon.ico'];
 
-        const seoPath = path.join(localPath, 'seo.json');
-        if (fs.existsSync(seoPath) && fs.statSync(seoPath).isFile()) {
-            seoConfig = JSON.parse(fs.readFileSync(seoPath, 'utf-8'));
-            if (!(seoConfig instanceof Array)) {
-                throw 'seo.json error';
+    async scanDir(localPath, prefixPathLength) {
+        const fileList = await utils.readDir(localPath);
+        if (fileList != null && fileList.length > 0) {
+            for (const it of fileList) {
+                const tempPath = path.join(localPath, it);
+                const fileInfo = await utils.getFileInfo(tempPath);
+                if (fileInfo == null) {
+                    continue;
+                }
+                if (fileInfo.isFile()) {
+                    await this.loadFile(tempPath, prefixPathLength);
+                } else if (fileInfo.isDirectory()) {
+                    await this.scanDir(tempPath, prefixPathLength);
+                }
             }
         }
     }
 
-    app.get("/**", (request, response) => {
-        if (webChecklist.indexOf(request.path) > -1) {
+    async addFile(path, prefixPathLength) {
+        const fileInfo = await utils.getFileInfo(path);
+        if (fileInfo == null) {
+            return;
+        }
+        if (fileInfo.isFile()) {
+            // is index.html
+            if (path.endsWith("index.html")) {
+                this.index = await utils.readFile(path) || '';
+            }
+            // is seo.json
+            if (path.endsWith("seo.json")) {
+                const seoJson = await utils.readFile(path);
+                if (seoJson != null) {
+                    this.seo = JSON.parse(seoJson);
+                    if (!(this.seo instanceof Array)) {
+                        throw 'seo.json error';
+                    }
+                }
+            }
+            this.files.push(path.substring(prefixPathLength));
+        }
+    }
+
+    async removeFile(path) {
+        const index = this.files.findIndex(r => path.endsWith(r));
+        this.files.splice(index, 1);
+    }
+
+    async match(path) {
+        if (this.suffix.findIndex(r => path.toLowerCase().endsWith(r)) > -1) {
+            return 2;
+        }
+        return this.files.findIndex(r => r.startsWith(path)) > -1 ? 1 : 0;
+    }
+
+    async existIndex() {
+        return this.index != null;
+    }
+
+    async getIndexData() {
+        return this.index || '';
+    }
+
+    async generateMetas(requestPath) {
+        let metas = '';
+        for (let config of (this.seo || [])) {
+            // Pre Match
+            let flag = (config.preMatch != null && config.preMatch.length > 0 && requestPath.startsWith(config.preMatch));
+            // Tail Match
+            flag = flag || (config.tailMatch != null && config.tailMatch.length > 0 && requestPath.endsWith(config.tailMatch));
+            // RegExp Match
+            flag = flag || new RegExp(config.regexp).test(requestPath);
+            // Non Match
+            if (!flag) {
+                continue;
+            }
+            for (let row of config.head) {
+                let meta = '';
+                for (let key in row) {
+                    if (row.hasOwnProperty(key)) {
+                        meta += ` ${key}="${row[key]}"`;
+                    }
+                }
+                metas += `<meta ${meta}/>\n`;
+            }
+        }
+        return metas;
+    }
+}
+
+// main
+async function main() {
+    // Default App
+    const app = express();
+
+    // Root Path
+    const root = process.cwd();
+
+    // Local Path
+    const localPath = path.join(root, process.env.LOCAL_PATH || 'web');
+    console.log('LocalPath: ' + localPath);
+
+    // Resource.
+    const resource = new Resource();
+
+    // Resource Watch
+    chokidar.watch(localPath).on('all', async (event, path) => {
+        if (event === 'unlink') {
+            await resource.removeFile(path);
+        } else if (event === 'add') {
+            await resource.addFile(path, localPath.length);
+        }
+    });
+
+    // Request
+    app.get("/**", async (request, response) => {
+        const status = await resource.match(request.path);
+        if (status === 1) {
             response.sendFile(path.join(localPath, request.path));
             return;
         }
-        if (indexBuffer == null || indexBuffer.length <= 0) {
+
+        if (status === 2) {
             response.end();
             return;
         }
-        const index = cheerio.load(indexBuffer.toString('utf-8'));
-        index('head').prepend(generateMetas(seoConfig, request.path));
 
+        if (!(await resource.existIndex())) {
+            response.end();
+            return;
+        }
+
+        const metas = await resource.generateMetas(request.path);
+        if (metas == null || metas.length <= 0) {
+            response.send(await resource.getIndexData());
+            return;
+        }
+
+        const index = cheerio.load(await resource.getIndexData());
+        index('head').prepend(metas);
         response.send(index.html());
     });
-}
 
-// Non Server
-const serverNonCache = () => {
-    app.get("/**", async (request, response) => {
-        const serverPath = path.join(localPath, request.path);
-        const fileInfo = await getFileInfo(serverPath);
-        if (fileInfo != null) {
-            return response.sendFile(serverPath);
+    // Start Server
+    const port = process.env.PORT || '3000';
+    const server = http.createServer(app);
+    server.listen(port);
+    server.on('error', (error) => {
+        if (error.syscall !== 'listen') {
+            throw error;
         }
 
-        const indexPath = path.join(localPath, 'index.html');
-        const indexInfo = await getFileInfo(indexPath);
-        if (indexInfo != null && indexInfo.isFile()) {
-            const seoPath = path.join(localPath, 'seo.json');
-            const seoInfo = await getFileInfo(seoPath);
-            if (seoInfo != null && seoInfo.isFile()) {
-                const seoConfig = JSON.parse((await readFile(seoPath)) || '[]');
-                if (!(seoConfig instanceof Array)) {
-                    throw 'seo.json error';
-                }
-                if (seoConfig.length > 0) {
-                    const index = cheerio.load(await readFile(indexPath));
-                    index('head').prepend(generateMetas(seoConfig, request.path));
-                    return response.send(index.html());
-                }
-            }
-            return response.sendFile(indexPath);
-        }
+        const bind = typeof port === 'string'
+            ? 'Pipe ' + port
+            : 'Port ' + port;
 
-        return response.end();
+        // handle specific listen errors with friendly messages
+        switch (error.code) {
+            case 'EACCES':
+                console.error(bind + ' requires elevated privileges');
+                process.exit(1);
+                break;
+            case 'EADDRINUSE':
+                console.error(bind + ' is already in use');
+                process.exit(1);
+                break;
+            default:
+                throw error;
+        }
+    });
+    server.on('listening', () => {
+        const address = server.address();
+        const bind = typeof address === 'string'
+            ? 'pipe ' + address
+            : 'port ' + address.port;
+        console.log('Listening on ' + bind);
     });
 }
 
-if (isCacheServer) {
-    console.log('Model: ServerCache');
-    serverCache();
-} else {
-    console.log('Model: ServerNonCache');
-    serverNonCache();
-}
-
-
-// Start Server
-const port = process.env.PORT || '3000';
-const server = http.createServer(app);
-server.listen(port);
-server.on('error', (error) => {
-    if (error.syscall !== 'listen') {
-        throw error;
-    }
-
-    const bind = typeof port === 'string'
-        ? 'Pipe ' + port
-        : 'Port ' + port;
-
-    // handle specific listen errors with friendly messages
-    switch (error.code) {
-        case 'EACCES':
-            console.error(bind + ' requires elevated privileges');
-            process.exit(1);
-            break;
-        case 'EADDRINUSE':
-            console.error(bind + ' is already in use');
-            process.exit(1);
-            break;
-        default:
-            throw error;
-    }
-});
-server.on('listening', () => {
-    const address = server.address();
-    const bind = typeof address === 'string'
-        ? 'pipe ' + address
-        : 'port ' + address.port;
-    console.log('Listening on ' + bind);
-});
+main().then();
 
 
