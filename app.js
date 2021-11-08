@@ -5,6 +5,7 @@ const process = require('process');
 const fs = require("fs");
 const cheerio = require('cheerio');
 const chokidar = require('chokidar');
+const cluster = require('cluster');
 
 // async utils
 const utils = {
@@ -250,6 +251,21 @@ async function main() {
     });
 }
 
-main().then();
+if (cluster.isMaster) {
+    const numCPUs = require('os').cpus().length;
+    // Fork workers
+    for (let i = 0; i < numCPUs; i++) {
+        cluster.fork();
+    }
+
+    cluster.on('exit', function (worker, code, signal) {
+        console.log('worker ' + worker.process.pid + ' restart');
+        setTimeout(function () {
+            cluster.fork();
+        }, 2000);
+    });
+} else {
+    main().then();
+}
 
 
