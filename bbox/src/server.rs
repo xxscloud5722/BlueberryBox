@@ -1,16 +1,28 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::env;
+use std::{env, thread};
+use std::any::Any;
+use std::ffi::OsStr;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::mpsc::SendError;
-use hyper::{Body, Method, Request, Response, Server, StatusCode};
+use hyper::{Body, HeaderMap, Method, Request, Response, Server, StatusCode};
+use hyper::header::HeaderValue;
 use hyper::service::{make_service_fn, service_fn};
+use lazy_static::lazy_static;
 use log::{error, info};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
+use tokio::sync::RwLock;
 use visdom::Vis;
 use crate::{core, global, setting};
+use crate::core::Resource;
+
+lazy_static! {
+    static ref RESOURCE: RwLock<Option<Resource>> = RwLock::new(None);
+    static ref EXCLUDE: Vec<&'static str> = vec!["/favicon.ico"];
+}
+
 
 
 pub async fn start(args: HashMap<String, String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -40,10 +52,17 @@ pub async fn start(args: HashMap<String, String>) -> Result<(), Box<dyn std::err
     };
 
     // global
-    global::set_local_path(&local_path);
-    let resource = core::Resource::from(&local_path, &config_path);
-    resource.handel().await;
-    global::set_resource(resource);
+    let resource = Resource::from(&local_path, &config_path);
+    // TODO 监听文件夹
+    // tokio::spawn(async move {
+    //     let resource = &*RESOURCE.read().await;
+    //     match resource {
+    //         None => {}
+    //         Some(value) => value.watcher().await
+    //     }
+    // });
+    resource.load().await;
+    *RESOURCE.write().await = Some(resource);
 
     // load log service
     setting::setting_log(&log_output).unwrap();
@@ -64,34 +83,74 @@ pub async fn start(args: HashMap<String, String>) -> Result<(), Box<dyn std::err
 
 async fn request_handle(request: Request<Body>) -> Result<Response<Body>, Infallible> {
     let mut response = Response::new(Body::empty());
-    // Non get Filter
+
+    // 过滤非Get 请求方式
     if request.method() != &Method::GET {
         *response.status_mut() = StatusCode::METHOD_NOT_ALLOWED;
         return Ok(response);
     }
 
-    let resource = global::get_resource();
+    // 如果资源没有准备就绪
+    let resource = &*RESOURCE.read().await;
+    if resource.is_none() {
+        return Ok(response);
+    }
+    let resource = resource.as_ref().unwrap();
 
-    // file is exist
+    // 如果静态资源不存在
     match resource.check_url(request.uri().path()).await {
         None => {}
         Some(value) => {
-            let file = File::open(value).await.unwrap();
+            let file = File::open(&value).await.unwrap();
             *response.body_mut() = Body::wrap_stream(tokio_util::io::ReaderStream::new(file));
+            let extension = match &value.as_path().extension().and_then(OsStr::to_str) {
+                None => "",
+                Some(value) => value
+            };
+            response_content_type(response.headers_mut(), extension);
             return Ok(response);
         }
     }
 
 
-    // index.html
-    if resource.is_index().await {
+    // 如果首页文件存在
+    if !EXCLUDE.contains(&request.uri().path()) && resource.is_index().await {
         *response.body_mut() = Body::from(resource.parse_html_by_config(request.uri().path()).await);
+        response_content_type(response.headers_mut(), "html");
         return Ok(response);
     }
 
 
     *response.status_mut() = StatusCode::NOT_FOUND;
     return Ok(response);
+}
+
+async fn response_content_type(header: &mut HeaderMap<HeaderValue>, format: &str) {
+    let format = format.to_lowercase();
+    if format == "txt" {
+        (*header).append("Content-Type", ("text/plan; charset=UTF-8").parse().unwrap());
+    }
+    if format == "xml" || format == "json" {
+        (*header).append("Content-Type", format!("text/{}; charset=UTF-8", format).parse().unwrap());
+    }
+    if format == "pdf" {
+        (*header).append("Content-Type", format!("application/{}; charset=UTF-8", format).parse().unwrap());
+    }
+    if format == "xls" || format == "xlsx" {
+        (*header).append("Content-Type", ("application/octet-stream; charset=UTF-8").parse().unwrap());
+    }
+    if format == "js" || format == "css" || format == "html" {
+        (*header).append("Content-Type", format!("text/{}", format).parse().unwrap());
+    }
+    if format == "png" || format == "jpg" || format == "jpeg" || format == "gif" {
+        (*header).append("Content-Type", format!("image/{}", format).parse().unwrap());
+    }
+    if format == "mp3" || format == "mpeg" || format == "ogg" || format == "wav" {
+        (*header).append("Content-Type", format!("audio/{}", format).parse().unwrap());
+    }
+    if format == "mp4" || format == "webm" || format == "ogg" {
+        (*header).append("Content-Type", format!("video/{}", format).parse().unwrap());
+    }
 }
 
 // if std::path::Path::new(value.as_os_str()).exists() {

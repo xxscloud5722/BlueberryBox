@@ -12,6 +12,9 @@ chrono = "0.4"
 hyper = { version = "0.14", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.6.9", features = ["full"] }
+async-recursion = "0.3.2"
 visdom = { version = "0.4.11" }
 notify = "4.0.0"
 lazy_static = "1.4.0"
+serde_json = "*"
+serde = { version = "*", features = ["derive"] }
