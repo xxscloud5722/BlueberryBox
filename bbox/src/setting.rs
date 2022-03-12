@@ -3,11 +3,15 @@ use std::fmt::Write;
 use std::path::PathBuf;
 use log::info;
 use tokio::io::AsyncWriteExt;
+use crate::core::FileInfo;
 
 /// setting log config
-pub fn setting_log(output: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut log_output = PathBuf::from(output);
-    log_output.push("blueberry_box.log");
+pub async fn setting_log(output: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let file_info = FileInfo::from_vec(vec![output, "blueberry_box.log"]).await;
+    if !file_info.directory_exist() {
+        file_info.create_directory().await;
+    }
+    let log_output = file_info.path_buf.as_path();
     fern::Dispatch::new()
         // Perform allocation-free log formatting
         .format(|out, message, record| {
@@ -74,5 +78,3 @@ heads Custom head"##;
 
     Ok(())
 }
-
-pub fn read_config() {}

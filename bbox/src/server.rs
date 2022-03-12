@@ -1,11 +1,6 @@
-use std::collections::HashMap;
 use std::convert::Infallible;
-use std::{env, thread};
-use std::any::Any;
 use std::ffi::OsStr;
 use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::sync::mpsc::SendError;
 use hyper::{Body, HeaderMap, Method, Request, Response, Server, StatusCode};
 use hyper::header::HeaderValue;
 use hyper::service::{make_service_fn, service_fn};
@@ -14,8 +9,7 @@ use log::{error, info};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
-use visdom::Vis;
-use crate::{core, global, setting};
+use crate::{Args, core, setting};
 use crate::core::Resource;
 
 lazy_static! {
@@ -25,54 +19,26 @@ lazy_static! {
 
 
 
-pub async fn start(args: HashMap<String, String>) -> Result<(), Box<dyn std::error::Error>> {
-    let port = match args.get("p") {
-        None => 3000,
-        Some(v) => v.parse::<u16>().unwrap()
-    };
-    let config_path = match args.get("c") {
-        None => {
-            let mut root = env::current_dir().unwrap();
-            root.push("config.json");
-            root.as_os_str().to_str().unwrap().to_string()
-        }
-        Some(v) => v.to_string()
-    };
-    let local_path = match args.get("path") {
-        None => {
-            let mut root = env::current_dir().unwrap();
-            root.push("static");
-            root.as_os_str().to_str().unwrap().to_string()
-        }
-        Some(v) => v.to_string()
-    };
-    let log_output = match args.get("log") {
-        None => env::current_dir().unwrap().as_os_str().to_str().unwrap().to_string(),
-        Some(v) => v.to_string()
-    };
+pub async fn start(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+    let port = args.port;
+    let config_path = args.config;
+    let local_path = args.scan;
+    let log_output = args.log;
 
-    // global
-    let resource = Resource::from(&local_path, &config_path);
-    // TODO 监听文件夹
-    // tokio::spawn(async move {
-    //     let resource = &*RESOURCE.read().await;
-    //     match resource {
-    //         None => {}
-    //         Some(value) => value.watcher().await
-    //     }
-    // });
-    resource.load().await;
+    // 设置日志配置
+    setting::setting_log(&log_output).await.unwrap();
+
+    // 资源核心初始化
+    let resource = Resource::from(&local_path, &config_path).await;
+    resource.init_config().await;
     *RESOURCE.write().await = Some(resource);
 
-    // load log service
-    setting::setting_log(&log_output).unwrap();
-
-    // create socket
+    // 创建socket
     let socket_address = SocketAddr::from(([0, 0, 0, 0], port));
 
     info!("BlueberryBox started on port(s) {} (http) with scan path '{}'", port, local_path);
 
-    // start server
+    // 启动服务
     if let Err(e) = Server::bind(&socket_address).serve(make_service_fn(|_| async {
         Ok::<_, Infallible>(service_fn(request_handle))
     })).await {
@@ -98,7 +64,7 @@ async fn request_handle(request: Request<Body>) -> Result<Response<Body>, Infall
     let resource = resource.as_ref().unwrap();
 
     // 如果静态资源不存在
-    match resource.check_url(request.uri().path()).await {
+    match resource.is_static_file(request.uri().path()).await {
         None => {}
         Some(value) => {
             let file = File::open(&value).await.unwrap();
