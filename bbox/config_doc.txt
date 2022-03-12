@@ -1,0 +1,4 @@
+path supports three rules: pre:// tail:// regular://; example pre://index/home
+metas Head SEO Resource Node
+title Web Page title
+heads Custom head
